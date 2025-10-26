@@ -1,0 +1,409 @@
+================================================================================================
+Institucion..: Universidad Técnica Nacional
+Sede.........: Del Pacífico
+Carrera......: Tecnologías de Información
+Curso........: ITI-621 - Tecnologías y Sistema Web III
+Periodo......: 3-2025
+Documento....: MyBox.txt
+Objetivos....: Demostración de uso de comandos de sistema operativo con PHP, simulando el 
+               servicio de DropBox, o Google Drive.
+Profesor.....: Jorge Ruiz (york)
+Estudiante...: Luis Alejandro López Reyes.
+================================================================================================	
+
+MyBox installation.
+
+Step 01 - Upgrade system
+
+	- sudo apt update && sudo apt upgrade -y
+	
+Step 02 - Publish the MyBox application using FTP connection
+
+	- Download MyBox.zip file from Virtual Campus in your local machine
+	
+	- Unzip in your work directory  
+
+	- Open Filezilla Client
+	
+		- Host......: 10.236.2.154
+		- Username..: york
+		- Password..: parda99*
+		- Port......: 21
+		
+	- Drag and Drop the MyBox directory into remote location 	
+		
+	sudo mkdir -p /var/www/html/york
+
+	se sube la carpeta de myBox a la carpeta remota de /
+
+	sudo mv /home/ftpusers/usuario1/myBox /var/www/html/york/mybox
+	sudo chown -R www-data:www-data /var/www/html/york
+	sudo chmod -R 755 /var/www/html/york
+	ls -l /var/www/html/york/mybox
+
+Step 03 - Create database on MySQL.
+
+	- Open the MySQL workbench (using remote connection)
+			
+	- into the MySQL shell, writes and execute the following code:
+
+		create database mybox char set utf8mb4;
+
+		use mybox;
+		
+		create table usuarios ( 
+			usuario varchar(15) not null, 
+			contra varchar(80) not null, 
+			nombre varchar(25) not null, 
+			email varchar(20) not null unique, 
+			primary key (usuario) 
+		) engine=innodb charset=utf8mb4;
+
+-- pasos que hice para que sirviera esa pich
+
+	sudo apt update
+	sudo apt install -y mysql-server
+
+	sudo systemctl status mysql --no-pager
+
+sudo mysql -e "
+CREATE DATABASE IF NOT EXISTS mybox CHARSET utf8mb4;
+CREATE USER IF NOT EXISTS 'mybox'@'localhost' IDENTIFIED BY 'mybox123';
+GRANT ALL PRIVILEGES ON mybox.* TO 'mybox'@'localhost';
+FLUSH PRIVILEGES;"
+
+sudo mysql -e "
+USE mybox;
+CREATE TABLE IF NOT EXISTS usuarios(
+  usuario VARCHAR(15) NOT NULL,
+  contra  VARCHAR(80) NOT NULL,
+  nombre  VARCHAR(25) NOT NULL,
+  email   VARCHAR(20) NOT NULL UNIQUE,
+  PRIMARY KEY(usuario)
+) ENGINE=InnoDB CHARSET=utf8mb4;"
+
+sudo mysql -e "SHOW DATABASES;"
+sudo mysql -e "USE mybox; SHOW TABLES;"
+
+sudo systemctl restart apache2
+
+-- Por si del todo no sirve.
+
+# phpinfo (para confirmar módulos/ini cargados)
+echo '<?php phpinfo();' | sudo tee /var/www/html/york/mybox/phpinfo.php
+
+# test_db (para validar credenciales y extensión mysqli)
+cat <<'PHP' | sudo tee /var/www/html/york/mybox/test_db.php
+<?php
+ini_set('display_errors', 1);
+error_reporting(E_ALL);
+$user = getenv('DB_USER');
+$pass = getenv('DB_PASS');
+$mysqli = @new mysqli('localhost', $user, $pass, 'mybox');
+if ($mysqli->connect_errno) {
+  http_response_code(500);
+  echo "DB_CONNECT_ERROR: (" . $mysqli->connect_errno . ") " . $mysqli->connect_error;
+  exit;
+}
+echo "DB_OK";
+PHP
+
+-- Instalación de mysqli si no está
+
+sudo apt update
+sudo apt install -y php8.3-mysql
+sudo phpenmod mysqli pdo_mysql
+sudo systemctl restart apache2
+
+php -m | grep -i mysqli     # debería mostrar: mysqli
+
+-- Hay que cambiar los parámetros de conexión desde el código, con:
+
+sudo nano /var/www/html/york/mybox/codigos/conexion.inc
+
+Se reemplaza por esto:
+
+<?php
+// ===============================
+// Archivo: codigos/conexion.inc
+// ===============================
+
+// Mostrar errores para depurar
+ini_set('display_errors', 1);
+error_reporting(E_ALL);
+
+// Parámetros de conexión (usando variables de entorno)
+$servidor  = 'localhost';
+$basedatos = 'mybox';
+$usuario   = getenv('DB_USER') ?: 'mybox';
+$contra    = getenv('DB_PASS') ?: 'mybox123';
+
+// Intentar conexión
+$conex = @mysqli_connect($servidor, $usuario, $contra, $basedatos);
+
+if (!$conex) {
+    echo "<h3 style='color:red'>Error: No se puede conectar al servidor de MySQL.</h3><hr>";
+    echo "<strong>Número........:</strong> " . mysqli_connect_errno() . "<br>";
+    echo "<strong>Descripción...:</strong> " . mysqli_connect_error() . "<br>";
+    exit;
+}
+
+// Forzar UTF-8
+mysqli_set_charset($conex, 'utf8mb4');
+?>
+
+sudo systemctl restart apache2
+
+http://localhost:8080/york/mybox/
+
+Step 04 - Create directory for the MyBox virtual users
+
+	- Into the remote server
+	
+		sudo mkdir /home/myboxusers
+		sudo chown www-data:www-data /home/myboxusers
+		sudo chmod -R 755 /home/myboxusers
+
+Step 05. Create PHP environment variables
+
+	- nano /utiles/variables.conf
+	
+		SetEnv HOME_PATH "/home/myboxusers"
+		SetEnv DB_USER "root"
+		SetEnv DB_PASS "alejandro03"
+
+	- Save changes
+
+
+Step 06. Configuration of the PHP CGI to load environment variables and custom site
+
+	sudo apt update
+	sudo apt install -y apache2 php libapache2-mod-php
+
+	- nano /etc/apache2/apache2.conf
+	
+		- Add the following instrucction before the directory segment
+			
+			ServerName localhost		#en la primera linea del archivo
+			
+			Include /utiles/variables.conf	#arriba del primer titulo que salga de directory
+
+		- Add the custom behavior to MyBox application
+
+<Directory /var/www/html/york/mybox>
+    Options Indexes FollowSymLinks
+    AllowOverride None
+    Require all granted
+
+    #---------------------------------------------------------------------
+    # Forbidden to browse web directory
+    #---------------------------------------------------------------------
+    Options All -Indexes
+
+    #---------------------------------------------------------------------
+    # Try and catch error and show the custom page information
+    #---------------------------------------------------------------------
+    ErrorDocument 400 http://localhost/york/mybox/errores/400.php
+    ErrorDocument 403 http://localhost/york/mybox/errores/403.php
+    ErrorDocument 404 http://localhost/york/mybox/errores/404.php
+    ErrorDocument 500 http://localhost/york/mybox/errores/500.php
+
+    #---------------------------------------------------------------------
+    # Deny access to files with the following extensions
+    #---------------------------------------------------------------------
+    <FilesMatch "(\.(bak|config|inc|ini|log|sh|sql)|~)$">
+        Order allow,deny
+        Deny from all
+        Satisfy All
+    </FilesMatch>
+
+    #---------------------------------------------------------------------
+    # Force HTTPS (commented until SSL step)
+    #---------------------------------------------------------------------
+    #RewriteEngine on
+    #RewriteCond %{HTTPS} !on
+    #RewriteRule (.*) https://%{HTTP_HOST}%{REQUEST_URI}
+</Directory>				
+	
+	- Save changes
+
+Step 07 - Restart apache2 service
+
+	sudo systemctl restart apache2
+	apache2ctl graceful
+
+Step 08 - Run application
+
+	- In your favorite web browser open the MyBox url
+	
+		http://10.236.2.154/york/mybox
+		http://localhost:8080/york/mybox/index.php
+	
+		If running:
+			print('you be happy, you are in YUPI time')	
+		else:
+			print('No YUPI, try again...!')	
+	
+Step 09 - Install https protocol
+
+	- apt-get install openssl ca-certificates
+
+	- mkdir -p ~/certs && cd ~/certs
+	
+	- openssl genrsa -des3 -out server.key 2048
+	
+		Enter pass phrase for server.key: <password>
+		thegoat
+		
+		Verifying - Enter pass phrase for server.key: <the same password>
+		thegoat
+		
+	- openssl rsa -in server.key -out server.key.insecure
+
+		Enter pass phrase for server.key: <the same password>
+		thegoat
+
+	- chmod 600 server.key.insecure
+
+	- ls -lrth 
+	
+	- openssl req -new -key server.key -out server.csr
+	
+		Enter pass phrase for server.key: <the same password>
+		thegoat
+		
+		You are about to be asked to enter information that will be
+		incorporated into your certificate request.
+		
+		What you are about to enter is what is called a Distinguished Name
+		or a DN. There are quite a few fields but you can leave some blank
+		
+		For some fields there will be a default value, If you enter '.', the
+		field will be left blank.
+		
+			Country Name (2 letter code) [AU]: CR
+			
+			State or Province Name (full name) [Some-State]: Puntarenas
+			
+			Locality Name (eg, city) []: Puntarenas
+			
+			Organization Name (eg, company) [Internet Widgits Pty Ltd]: UTN
+
+			Organizational Unit Name (eg, section) []: Lab303
+			
+			Common Name (e.g. server FQDN or YOUR name) []: localhost
+			
+			Email Address []: jruiz@utn.ac.cr
+			
+			Please enter the following 'extra' attributes to be sent with your
+			certificate request
+			
+				A challenge password []: <a clue to remember password>
+				CristianoRonaldo7
+				
+				An optional company name []:
+				empty
+				
+	- openssl x509 -req -days 365 -in server.csr -signkey server.key -out server.crt
+	
+		Enter pass phrase for server.key:
+		thegoat
+		
+	- ls -lrth
+	
+		you can see the next files
+	
+			Archivo 				Description
+			--------------------------------------------------------------------
+			server.key  			The private key with password
+			server.key.insecure 	The private key without password
+			server.csr 				The certificate with sign
+			server.crt 				The self signed certificate
+
+	- cp server.key server.key.insecure /etc/ssl/private/
+	
+	- cp server.crt /etc/ssl/certs/
+
+	- nano /etc/apache2/sites-available/default-ssl.conf
+	
+		- SSLCertificateFile /etc/ssl/certs/server.crt
+		- SSLCertificateKeyFile /etc/ssl/private/server.key.insecure
+
+	# se cambian por las que ya están definidas
+				
+	- Save changes	
+
+	- a2enmod ssl
+	- a2ensite default-ssl
+	- systemctl reload apache2
+	
+Step 10 - Using the https protocol	
+	
+	- Testing the next URL https://10.236.2.154/york/mybox 
+	http://localhost:8080/york/mybox
+
+	- Force the run only in https protocol
+	
+		- nano /etc/apache2/apache2.conf
+
+			<Directory /var/www/html/york/mybox>
+				:
+				:
+				:
+				:
+				RewriteEngine On
+    				RewriteCond %{HTTPS} !=on
+    				RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [R=301,L]
+			</Directory>
+
+	# solo se modifican las ultimas 3 líneas
+			
+	- Save changes
+	
+	- Change the PHP CGI behavior
+
+		- a2enmod rewrite
+		- apache2ctl graceful
+		
+		If running:
+			print('you be very happy, you are in YUPI time again')	
+		else:
+			print('No YUPI, try again...!')	
+
+	# Primero se prueba en:
+	http://localhost:8080/york/mybox
+
+	# Debe redirigir automáticamente a:
+	https://localhost:8443/york/mybox
+
+-- Parámetros de la conexión a BD desde el código de PHP.
+
+<?php
+// ===============================
+// Archivo: codigos/conexion.inc
+// ===============================
+
+// Mostrar errores para depurar
+ini_set('display_errors', 1);
+error_reporting(E_ALL);
+
+// Parámetros de conexión (usando variables de entorno)
+$servidor  = 'localhost';
+$basedatos = 'mybox';
+$usuario   = getenv('DB_USER') ?: 'mybox';
+$contra    = getenv('DB_PASS') ?: 'mybox123';
+
+// Intentar conexión
+$conex = @mysqli_connect($servidor, $usuario, $contra, $basedatos);
+
+if (!$conex) {
+    echo "<h3 style='color:red'>Error: No se puede conectar al servidor de MySQL.</h3><hr>";
+    echo "<strong>Número........:</strong> " . mysqli_connect_errno() . "<br>";
+    echo "<strong>Descripción...:</strong> " . mysqli_connect_error() . "<br>";
+    exit;
+}
+
+// Forzar UTF-8
+mysqli_set_charset($conex, 'utf8mb4');
+?>
+

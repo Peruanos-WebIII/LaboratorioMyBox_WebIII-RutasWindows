@@ -1,91 +1,109 @@
 <?php
-	//Inicio la sesión
-	session_start();
+// Inicio la sesión
+session_start();
 
-	//Utiliza los datos de sesion comprueba que el usuario este autenticado
-	if ($_SESSION["autenticado"] != "SI") {
-		header("Location: ../index.php");
-		exit(); //fin del script
-	}
+// Verifica que el usuario esté autenticado
+if (!isset($_SESSION["autenticado"]) || $_SESSION["autenticado"] != "SI") {
+    header("Location: ../index.php");
+    exit(); // fin del script
+}
 
-	// Obtener parámetros
-	$carpetaABorrar = isset($_GET['dir']) ? $_GET['dir'] : '';
-	$carpetaActual = isset($_GET['carpeta']) ? $_GET['carpeta'] : '';
+// Obtener parámetros
+$carpetaABorrar  = isset($_GET['dir'])     ? $_GET['dir']     : '';
+$carpetaActual   = isset($_GET['carpeta']) ? $_GET['carpeta'] : '';
 
-	if (empty($carpetaABorrar)) {
-		header("Location: ../carpetas.php");
-		exit();
-	}
+if ($carpetaABorrar === '') {
+    header("Location: ../carpetas.php");
+    exit();
+}
 
-	//declara ruta carpeta del usuario
-	$rutaBase = "d:\\mybox";
-	$rutaUsuario = $rutaBase.'\\'.$_SESSION["usuario"];
+// MISMA ruta base que en carpetas.php / creadir.php / agrearchi.php / abrArchi.php
+$rutaBase    = "C:" . DIRECTORY_SEPARATOR . "xampp" . DIRECTORY_SEPARATOR . "htdocs"
+             . DIRECTORY_SEPARATOR . "LaboratorioMyBox_WebIII-RutasWindows"
+             . DIRECTORY_SEPARATOR . "mybox";
+$rutaUsuario = $rutaBase . DIRECTORY_SEPARATOR . $_SESSION["usuario"];
 
-	// Construir la ruta actual
-	$rutaActual = $rutaUsuario;
-	if (!empty($carpetaActual)) {
-		$rutaActual = $rutaUsuario . '\\' . $carpetaActual;
-	}
+// Construir la ruta actual (donde estoy parado en carpetas.php)
+$rutaActual = $rutaUsuario;
+if (!empty($carpetaActual)) {
+    // la carpetaActual viene estilo URL (con /), la pasamos a separador del sistema
+    $carpetaActualSistema = str_replace('/', DIRECTORY_SEPARATOR, $carpetaActual);
+    $rutaActual           = $rutaUsuario . DIRECTORY_SEPARATOR . $carpetaActualSistema;
+}
 
-	// Ruta de la carpeta a borrar
-	$rutaBorrar = $rutaActual . '\\' . $carpetaABorrar;
+// Ruta de la carpeta a borrar
+$rutaBorrar = $rutaActual . DIRECTORY_SEPARATOR . $carpetaABorrar;
 
-	// Verifica que las rutas sean válidas y estén dentro de la carpeta del usuario
-	$rutaRealizada = realpath($rutaActual);
-	$rutaBorrarRealizada = realpath($rutaBorrar);
-	$rutaRealUsuario = realpath($rutaUsuario);
-	
-	if ($rutaRealizada === false || $rutaBorrarRealizada === false || 
-	    strpos($rutaRealizada, $rutaRealUsuario) !== 0 || 
-	    strpos($rutaBorrarRealizada, $rutaRealUsuario) !== 0) {
-		header("Location: ../carpetas.php");
-		exit();
-	}
+// Verificamos que todo esté dentro de la carpeta del usuario (seguridad)
+$rutaRealUsuario = realpath($rutaUsuario);
+$rutaRealActual  = realpath($rutaActual);
+$rutaRealBorrar  = realpath($rutaBorrar);
 
-	// Función recursiva para borrar carpetas con contenido
-	function borrarCarpetaRecursiva($ruta) {
-		if (!is_dir($ruta)) return false;
-		
-		$archivos = scandir($ruta);
-		foreach ($archivos as $archivo) {
-			if ($archivo != "." && $archivo != "..") {
-				$rutaArchivo = $ruta . '\\' . $archivo;
-				if (is_dir($rutaArchivo)) {
-					borrarCarpetaRecursiva($rutaArchivo);
-				} else {
-					unlink($rutaArchivo);
-				}
-			}
-		}
-		return rmdir($ruta);
-	}
+if ($rutaRealUsuario === false || $rutaRealActual === false || $rutaRealBorrar === false ||
+    strpos($rutaRealActual, $rutaRealUsuario) !== 0 ||
+    strpos($rutaRealBorrar,  $rutaRealUsuario) !== 0) {
+    header("Location: ../carpetas.php");
+    exit();
+}
 
-	// Intentar borrar la carpeta
-	if (borrarCarpetaRecursiva($rutaBorrar)) {
-		$mensaje = "Carpeta eliminada exitosamente.";
-		$tipo = "success";
-	} else {
-		$mensaje = "No se pudo eliminar la carpeta. Verifique los permisos.";
-		$tipo = "danger";
-	}
+// Función recursiva para borrar carpeta con su contenido
+function borrarCarpetaRecursiva($rutaDir)
+{
+    if (!is_dir($rutaDir)) {
+        return false;
+    }
 
-	// Redirigir a carpetas.php con parámetro de carpeta actual
-	$urlRetorno = "../carpetas.php" . (!empty($carpetaActual) ? "?carpeta=" . urlencode($carpetaActual) : "");
-	
-	// Mostrar mensaje y redirigir
-	echo "<!doctype html>";
-	echo "<html>";
-	echo "<head>";
-	echo "<meta charset='UTF-8'>";
-	echo "<title>Eliminar Carpeta</title>";
-	echo "</head>";
-	echo "<body class='container cuerpo'>";
-	echo "<div class='alert alert-" . $tipo . "'>";
-	echo "<h3>" . htmlspecialchars($mensaje) . "</h3>";
-	echo "</div>";
-	echo "<script language='JavaScript'>";
-	echo "setTimeout(function() { location.href='" . $urlRetorno . "'; }, 2000);";
-	echo "</script>";
-	echo "</body>";
-	echo "</html>";
+    $items = scandir($rutaDir);
+    foreach ($items as $item) {
+        if ($item === '.' || $item === '..') {
+            continue;
+        }
+
+        $rutaItem = $rutaDir . DIRECTORY_SEPARATOR . $item;
+
+        if (is_dir($rutaItem)) {
+            borrarCarpetaRecursiva($rutaItem);
+        } else {
+            @unlink($rutaItem);
+        }
+    }
+
+    return @rmdir($rutaDir);
+}
+
+// Intentar borrar la carpeta
+if (borrarCarpetaRecursiva($rutaBorrar)) {
+    $mensaje = "Carpeta eliminada exitosamente.";
+    $tipo    = "success";
+} else {
+    $mensaje = "No se pudo eliminar la carpeta. Verifique los permisos.";
+    $tipo    = "danger";
+}
+
+// Armar URL de retorno
+$urlRetorno = "../carpetas.php";
+if (!empty($carpetaActual)) {
+    $urlRetorno .= "?carpeta=" . urlencode($carpetaActual);
+}
+
+// Mostrar mensaje y redirigir a carpetas.php
 ?>
+<!doctype html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Eliminar Carpeta</title>
+    <link rel="stylesheet" href="../estilos/bootstrap.css">
+    <link rel="stylesheet" href="../estilos/formatos.css">
+</head>
+<body class="container cuerpo">
+    <div class="alert alert-<?php echo htmlspecialchars($tipo); ?>" style="margin-top:20px;">
+        <h3><?php echo htmlspecialchars($mensaje); ?></h3>
+    </div>
+    <script>
+        setTimeout(function () {
+            location.href = '<?php echo $urlRetorno; ?>';
+        }, 2000);
+    </script>
+</body>
+</html>

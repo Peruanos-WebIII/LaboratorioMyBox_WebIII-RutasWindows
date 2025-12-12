@@ -3,62 +3,83 @@
     session_start();
 
     //Utiliza los datos de sesion comprueba que el usuario este autenticado
-    if ($_SESSION["autenticado"] != "SI") {
-       header("Location: index.php");
-        exit(); //fin del scrip
+    if (!isset($_SESSION["autenticado"]) || $_SESSION["autenticado"] != "SI") {
+        header("Location: index.php");
+        exit(); //fin del script
     }
 
-	// Variables de ruta
-	$rutaBase = "d:\\mybox";
-	$rutaUsuario = $rutaBase.'\\'.$_SESSION["usuario"];
-	
-	// Obtener la carpeta actual desde GET (si no existe, usar la carpeta del usuario)
-	$carpetaActual = isset($_GET['carpeta']) ? $_GET['carpeta'] : '';
-	$ruta = $rutaUsuario;
-	
-	if (!empty($carpetaActual)) {
-		$ruta = $rutaUsuario . '\\' . $carpetaActual;
-	}
+    // ===== RUTAS (MISMAS QUE EN carpetas.php y creadir.php) =====
+    $rutaBase = "C:" . DIRECTORY_SEPARATOR . "xampp" . DIRECTORY_SEPARATOR . "htdocs" . DIRECTORY_SEPARATOR . "LaboratorioMyBox_WebIII-RutasWindows" . DIRECTORY_SEPARATOR . "mybox";
+    $rutaUsuario = $rutaBase . DIRECTORY_SEPARATOR . $_SESSION["usuario"];
 
-	// Verifica que la ruta sea válida y esté dentro de la carpeta del usuario
-	$rutaRealizada = realpath($ruta);
-	$rutaRealUsuario = realpath($rutaUsuario);
-	
-	if ($rutaRealizada === false || strpos($rutaRealizada, $rutaRealUsuario) !== 0) {
-		header("Location: carpetas.php");
-		exit();
-	}
+    // Asegurarse de que exista la carpeta del usuario
+    if (!is_dir($rutaUsuario)) {
+        mkdir($rutaUsuario, 0777, true);
+    }
 
-	$Accion_Formulario = $_SERVER['PHP_SELF'];
+    // Obtener la carpeta actual desde GET (si no existe, usar la carpeta del usuario)
+    $carpetaActual = isset($_GET['carpeta']) ? $_GET['carpeta'] : '';
+    $ruta = $rutaUsuario;
+
+    if (!empty($carpetaActual)) {
+        // Convertir separadores tipo URL a separador del sistema
+        $carpetaActualSistema = str_replace('/', DIRECTORY_SEPARATOR, $carpetaActual);
+        $ruta = $rutaUsuario . DIRECTORY_SEPARATOR . $carpetaActualSistema;
+    }
+
+    // Verifica que la ruta sea válida y esté dentro de la carpeta del usuario
+    $rutaRealizada   = realpath($ruta);
+    $rutaRealUsuario = realpath($rutaUsuario);
+
+    if ($rutaRealizada === false || strpos($rutaRealizada, $rutaRealUsuario) !== 0) {
+        header("Location: carpetas.php");
+        exit();
+    }
+
+    $Accion_Formulario = $_SERVER['PHP_SELF'];
+
     if ((isset($_POST["OC_Aceptar"])) && ($_POST["OC_Aceptar"] == "frmArchi")) {
-		$Sali = $_FILES['txtArchi']['name'];
 
-		// Validar que se haya seleccionado un archivo
-		if (empty($Sali)) {
-			$error = "Debe seleccionar un archivo.";
-		} else {
-			// Limpiar espacios del nombre del archivo
-			$Sali = str_replace(' ','_',$Sali);
-			$rutaArchivo = $ruta . '\\' . $Sali;
-			
-			// Verificar si el archivo ya existe
-			if (file_exists($rutaArchivo)) {
-				$error = "El archivo ya existe. Por favor, use otro nombre o elimine el existente.";
-			} else {
-				// Intentar mover el archivo
-				if (move_uploaded_file($_FILES['txtArchi']['tmp_name'], $rutaArchivo)) {
-					// Cambiar permisos
-					if (chmod($rutaArchivo, 0644)) {
-						header("Location: carpetas.php" . (!empty($carpetaActual) ? "?carpeta=" . urlencode($carpetaActual) : ""));
-						exit(); //fin del scrip
-					} else {
-						$error = 'No se pudo cambiar los permisos. Consulte a su administrador.';
-					}
-				} else {
-					$error = 'No se pudo cargar el archivo. Intente de nuevo.';
-				}
-			}
-		}
+        $Sali = isset($_FILES['txtArchi']['name']) ? $_FILES['txtArchi']['name'] : '';
+
+        // Validar que se haya seleccionado un archivo
+        if (empty($Sali)) {
+            $error = "Debe seleccionar un archivo.";
+        } else {
+
+            // Validar caracteres no permitidos en nombre de archivo
+            if (strpbrk($Sali, '<>:"|?*\\/') !== false) {
+                $error = "El nombre del archivo contiene caracteres no permitidos.";
+            } else {
+
+                // Limpiar espacios del nombre del archivo
+                $Sali = str_replace(' ', '_', $Sali);
+                $rutaArchivo = $ruta . DIRECTORY_SEPARATOR . $Sali;
+
+                // Verificar si el archivo ya existe
+                if (file_exists($rutaArchivo)) {
+                    $error = "El archivo ya existe. Por favor, use otro nombre o elimine el existente.";
+                } else {
+                    // Intentar mover el archivo
+                    if (move_uploaded_file($_FILES['txtArchi']['tmp_name'], $rutaArchivo)) {
+
+                        // Cambiar permisos (en Windows no es crítico, pero se deja)
+                        @chmod($rutaArchivo, 0644);
+
+                        // Volver a la vista de carpetas, manteniendo la carpeta actual si aplica
+                        $destino = "carpetas.php";
+                        if (!empty($carpetaActual)) {
+                            $destino .= "?carpeta=" . urlencode($carpetaActual);
+                        }
+                        header("Location: " . $destino);
+                        exit(); //fin del script
+
+                    } else {
+                        $error = 'No se pudo cargar el archivo. Intente de nuevo.';
+                    }
+                }
+            }
+        }
    }
 ?>
 <!doctype html>
@@ -97,7 +118,8 @@
 				?>
 				<form action="<?php echo $Accion_Formulario . (!empty($carpetaActual) ? '?carpeta=' . urlencode($carpetaActual) : ''); ?>" method="post" enctype="multipart/form-data" name="frmArchi">
 					<fieldset>
-           				<label><strong>Archivo</strong></label><input name="txtArchi" type="file" id="txtArchi" size="60" required />
+           				<label><strong>Archivo</strong></label>
+                        <input name="txtArchi" type="file" id="txtArchi" size="60" required />
            				<br><br>
            				<input type="submit" name="Submit" value="Cargar" class="btn btn-primary" />
            				<a href="carpetas.php<?php echo !empty($carpetaActual) ? '?carpeta=' . urlencode($carpetaActual) : ''; ?>" class="btn btn-default">Cancelar</a>

@@ -1,78 +1,114 @@
 <?php
-	//Inicio la sesión
-	session_start();
+// codigos/descargar.php
+session_start();
 
-	//Utiliza los datos de sesion comprueba que el usuario este autenticado
-	if ($_SESSION["autenticado"] != "SI") {
-		header("Location: ../index.php");
-		exit(); //fin del script
-	}
+// Verificar autenticación
+if (!isset($_SESSION["autenticado"]) || $_SESSION["autenticado"] != "SI") {
+    header("Location: ../index.php");
+    exit();
+}
 
-	// Obtener parámetros
-	$archivo = isset($_GET['arch']) ? $_GET['arch'] : '';
-	$carpetaActual = isset($_GET['carpeta']) ? $_GET['carpeta'] : '';
+// Parámetros
+$archivo    = isset($_GET['arch'])    ? $_GET['arch']    : '';
+$carpetaURL = isset($_GET['carpeta']) ? $_GET['carpeta'] : '';
+$owner      = isset($_GET['owner']) && $_GET['owner'] !== ''
+                ? $_GET['owner']
+                : $_SESSION['usuario'];
 
-	if (empty($archivo)) {
-		header("Location: ../carpetas.php");
-		exit();
-	}
+if ($archivo === '') {
+    header("Location: ../carpetas.php");
+    exit();
+}
 
-	//declara ruta carpeta del usuario
-	$rutaBase = "d:\\mybox";
-	$rutaUsuario = $rutaBase.'\\'.$_SESSION["usuario"];
+// MISMA ruta base
+$rutaBase         = "C:" . DIRECTORY_SEPARATOR . "xampp" . DIRECTORY_SEPARATOR . "htdocs"
+                  . DIRECTORY_SEPARATOR . "LaboratorioMyBox_WebIII-RutasWindows"
+                  . DIRECTORY_SEPARATOR . "mybox";
+$rutaUsuarioOwner = $rutaBase . DIRECTORY_SEPARATOR . $owner;
 
-	// Construir la ruta del archivo
-	$ruta = $rutaUsuario;
-	if (!empty($carpetaActual)) {
-		$ruta = $rutaUsuario . '\\' . $carpetaActual;
-	}
-	
-	$rutaArchivo = $ruta . '\\' . $archivo;
+// Directorio del propietario debe existir
+if (!is_dir($rutaUsuarioOwner)) {
+    header("Location: ../carpetas.php");
+    exit();
+}
 
-	// Verifica que la ruta sea válida y esté dentro de la carpeta del usuario
-	$rutaRealizada = realpath($ruta);
-	$rutaArchivoRealizada = realpath($rutaArchivo);
-	$rutaRealUsuario = realpath($rutaUsuario);
-	
-	if ($rutaRealizada === false || $rutaArchivoRealizada === false || 
-	    strpos($rutaRealizada, $rutaRealUsuario) !== 0 || 
-	    strpos($rutaArchivoRealizada, $rutaRealUsuario) !== 0) {
-		header("Location: ../carpetas.php");
-		exit();
-	}
+// Carpeta donde está el archivo
+$carpetaSistema = '';
+if (!empty($carpetaURL)) {
+    $carpetaSistema = str_replace('/', DIRECTORY_SEPARATOR, $carpetaURL);
+}
 
-	// Verificar que el archivo existe y es un archivo (no un directorio)
-	if (!file_exists($rutaArchivo) || !is_file($rutaArchivo)) {
-		header("Location: ../carpetas.php");
-		exit();
-	}
+$ruta = $rutaUsuarioOwner;
+if ($carpetaSistema !== '') {
+    $ruta .= DIRECTORY_SEPARATOR . $carpetaSistema;
+}
 
-	// Obtener información del archivo
-	$nombreArchivo = basename($rutaArchivo);
-	$tamanoArchivo = filesize($rutaArchivo);
-	$tipoMime = mime_content_type($rutaArchivo);
+$rutaArchivo = $ruta . DIRECTORY_SEPARATOR . $archivo;
 
-	// Si mime_content_type no está disponible, usar una alternativa
-	if (!$tipoMime || $tipoMime === false) {
-		$tipoMime = 'application/octet-stream';
-	}
+// Seguridad de rutas
+$rutaRealUsuario = realpath($rutaUsuarioOwner);
+$rutaRealArchivo = realpath($rutaArchivo);
 
-	// Limpiar buffer de salida
-	ob_end_clean();
+if ($rutaRealUsuario === false || $rutaRealArchivo === false ||
+    strpos($rutaRealArchivo, $rutaRealUsuario) !== 0) {
+    header("Location: ../carpetas.php");
+    exit();
+}
 
-	// Configurar headers para descargar el archivo
-	header('Content-Type: ' . $tipoMime);
-	header('Content-Disposition: attachment; filename="' . $nombreArchivo . '"');
-	header('Content-Length: ' . $tamanoArchivo);
-	header('Pragma: no-cache');
-	header('Expires: 0');
-	header('Cache-Control: no-cache, must-revalidate');
+// Si el archivo es compartido, validar en la BD
+if ($owner !== $_SESSION['usuario']) {
+    require_once('conexion.inc'); // estamos dentro de /codigos
 
-	// Leer y enviar el archivo
-	if (readfile($rutaArchivo) === false) {
-		http_response_code(404);
-		echo "Error al descargar el archivo.";
-	}
+    $rutaRelativa = $carpetaURL !== ''
+        ? $carpetaURL . '/' . $archivo
+        : $archivo;
 
-	exit();
+    $sql  = "SELECT 1 FROM compartidos 
+             WHERE propietario = ? 
+               AND usuario_compartido = ?
+               AND ruta_relativa = ?
+             LIMIT 1";
+
+    $stmt = mysqli_prepare($conex, $sql);
+    mysqli_stmt_bind_param($stmt, "sss", $owner, $_SESSION['usuario'], $rutaRelativa);
+    mysqli_stmt_execute($stmt);
+    mysqli_stmt_store_result($stmt);
+
+    if (mysqli_stmt_num_rows($stmt) === 0) {
+        // No autorizado
+        header("Location: ../carpetas.php");
+        exit();
+    }
+    mysqli_stmt_close($stmt);
+}
+
+// Verificar que el archivo exista
+if (!file_exists($rutaArchivo) || !is_file($rutaArchivo)) {
+    header("Location: ../carpetas.php");
+    exit();
+}
+
+$nombreArchivo = basename($rutaArchivo);
+$tamanoArchivo = filesize($rutaArchivo);
+$tipoMime      = mime_content_type($rutaArchivo);
+
+if (!$tipoMime) {
+    $tipoMime = 'application/octet-stream';
+}
+
+// Limpiar buffer
+if (ob_get_length()) {
+    ob_end_clean();
+}
+
+// Headers de descarga
+header('Content-Type: ' . $tipoMime);
+header('Content-Disposition: attachment; filename="' . $nombreArchivo . '"');
+header('Content-Length: ' . $tamanoArchivo);
+header('Pragma: no-cache');
+header('Expires: 0');
+header('Cache-Control: no-cache, must-revalidate');
+
+readfile($rutaArchivo);
+exit();
 ?>

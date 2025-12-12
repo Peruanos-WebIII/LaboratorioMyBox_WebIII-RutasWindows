@@ -3,7 +3,14 @@
     $Accion_Formulario = $_SERVER['PHP_SELF'];
     if((isset($_POST['txtUsua'])) && (isset($_POST['txtContra']))) {
        
-        $auxSql = sprintf("select nombre, usuario from usuarios Where usuario = '%s' and contra = password('%s')", $_POST['txtUsua'],$_POST['txtContra']);
+        $auxSql = sprintf(
+            "select nombre, usuario 
+            from usuarios 
+            where usuario = '%s' 
+            and contra = sha2('%s',256)",
+            $_POST['txtUsua'],
+            $_POST['txtContra']
+        );
         $regis = mysqli_query($conex,$auxSql);
 		
         //libera los inputs del cache     

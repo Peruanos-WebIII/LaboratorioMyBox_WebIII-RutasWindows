@@ -1,101 +1,96 @@
 <?php
-// abrArchi.php
 session_start();
 
-// Verificar autenticación
 if (!isset($_SESSION["autenticado"]) || $_SESSION["autenticado"] != "SI") {
     header("Location: index.php");
     exit();
 }
 
-// Parámetros
-$archivo     = isset($_GET['arch'])    ? $_GET['arch']    : '';
-$carpetaURL  = isset($_GET['carpeta']) ? $_GET['carpeta'] : '';
-$owner       = isset($_GET['owner']) && $_GET['owner'] !== ''
-                ? $_GET['owner']                  // propietario explícito (archivo compartido)
-                : $_SESSION['usuario'];           // por defecto, yo mismo
+require_once('codigos/conexion.inc'); // $conex
 
-if ($archivo === '') {
+$archivoId = isset($_GET['id']) ? (int)$_GET['id'] : 0;
+if ($archivoId <= 0) {
     echo "Archivo no especificado.";
     exit();
 }
 
-// MISMA ruta base que en carpetas.php / creadir.php / agrearchi.php
-$rutaBase         = "C:" . DIRECTORY_SEPARATOR . "xampp" . DIRECTORY_SEPARATOR . "htdocs"
-                  . DIRECTORY_SEPARATOR . "LaboratorioMyBox_WebIII-RutasWindows"
-                  . DIRECTORY_SEPARATOR . "mybox";
-$rutaUsuarioOwner = $rutaBase . DIRECTORY_SEPARATOR . $owner;
+// Obtener mi usuario_id 
+$sqlMiId = "SELECT id FROM usuarios WHERE usuario = ? LIMIT 1";
+$stmtMi  = $conex->prepare($sqlMiId);
+$stmtMi->bind_param("s", $_SESSION['usuario']);
+$stmtMi->execute();
+$resMi = $stmtMi->get_result();
+$miRow = $resMi->fetch_assoc();
+$stmtMi->close();
 
-// Directorio del propietario debe existir
-if (!is_dir($rutaUsuarioOwner)) {
-    echo "No existe el directorio del propietario.";
+$miId = $miRow ? (int)$miRow['id'] : 0;
+if ($miId <= 0) {
+    echo "Usuario inválido.";
     exit();
 }
 
-// Carpeta (subdirectorio) donde está el archivo
-$carpetaSistema = '';
-if (!empty($carpetaURL)) {
-    $carpetaSistema = str_replace('/', DIRECTORY_SEPARATOR, $carpetaURL);
-}
+// Validar permiso y traer contenido 
+$sql = "
+    SELECT a.nombre, a.mime, a.contenido, a.extension, OCTET_LENGTH(a.contenido) AS tam
+    FROM archivos a
+    WHERE a.id = ?
+      AND (
+            a.usuario_id = ?
+            OR EXISTS (
+                SELECT 1
+                FROM compartidos c
+                WHERE c.archivo_id = a.id
+                  AND c.compartido_con_id = ?
+            )
+      )
+    LIMIT 1
+";
 
-$ruta = $rutaUsuarioOwner;
-if ($carpetaSistema !== '') {
-    $ruta .= DIRECTORY_SEPARATOR . $carpetaSistema;
-}
+$stmt = $conex->prepare($sql);
+$stmt->bind_param("iii", $archivoId, $miId, $miId);
+$stmt->execute();
+$res = $stmt->get_result();
+$row = $res->fetch_assoc();
+$stmt->close();
 
-$rutaArchivo = $ruta . DIRECTORY_SEPARATOR . $archivo;
-
-// Seguridad de rutas
-$rutaRealUsuario = realpath($rutaUsuarioOwner);
-$rutaRealArchivo = realpath($rutaArchivo);
-
-if ($rutaRealUsuario === false || $rutaRealArchivo === false ||
-    strpos($rutaRealArchivo, $rutaRealUsuario) !== 0) {
+if (!$row) {
     echo "No tiene permiso para acceder a este archivo.";
     exit();
 }
 
-// Si el archivo es compartido (owner != usuario actual), validar en la BD
-if ($owner !== $_SESSION['usuario']) {
-    require_once('codigos/conexion.inc');
+// Preparar nombre
+$mime = !empty($row['mime']) ? $row['mime'] : 'application/octet-stream';
 
-    $rutaRelativa = $carpetaURL !== ''
-        ? $carpetaURL . '/' . $archivo
-        : $archivo;
-
-    $sql  = "SELECT 1 FROM compartidos 
-             WHERE propietario = ? 
-               AND usuario_compartido = ?
-               AND ruta_relativa = ?
-             LIMIT 1";
-
-    $stmt = mysqli_prepare($conex, $sql);
-    mysqli_stmt_bind_param($stmt, "sss", $owner, $_SESSION['usuario'], $rutaRelativa);
-    mysqli_stmt_execute($stmt);
-    mysqli_stmt_store_result($stmt);
-
-    if (mysqli_stmt_num_rows($stmt) === 0) {
-        echo "No tiene permiso para acceder a este archivo compartido.";
-        exit();
-    }
-    mysqli_stmt_close($stmt);
+$nombre = $row['nombre'];
+if (!empty($row['extension']) && stripos($nombre, '.') === false) {
+    $nombre .= '.' . $row['extension'];
 }
 
-// Mostrar el archivo
-$mime = mime_content_type($rutaArchivo);
-if (!$mime) {
-    $mime = 'application/octet-stream';
+$tam = isset($row['tam']) ? (int)$row['tam'] : 0;
+
+// Limpiar buffers por si algo imprimió antes
+while (ob_get_level()) {
+    ob_end_clean();
 }
 
-// Si es PDF, se abre embebido; si no, lo forzamos como descarga “inline”
-if ($mime === 'application/pdf') {
-    header('Content-Type: ' . $mime);
-    readfile($rutaArchivo);
-} else {
-    header('Content-Type: ' . $mime);
-    header('Content-Disposition: inline; filename="' . basename($rutaArchivo) . '"');
-    header('Content-Length: ' . filesize($rutaArchivo));
-    readfile($rutaArchivo);
-}
+$esPDF    = ($mime === 'application/pdf');
+$esImagen = (stripos($mime, 'image/') === 0);
 
+// PDF e imágenes = inline
+// Otros = descarga
+$disposition = ($esPDF || $esImagen) ? 'inline' : 'attachment';
+
+// Headers
+header('Content-Type: ' . $mime);
+header('Content-Disposition: ' . $disposition . '; filename="' . basename($nombre) . '"');
+if ($tam > 0) {
+    header('Content-Length: ' . $tam);
+}
+header('Pragma: no-cache');
+header('Expires: 0');
+header('Cache-Control: no-cache, must-revalidate');
+
+// Enviar contenido (BLOB)
+echo $row['contenido'];
 exit();
+?>

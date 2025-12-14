@@ -1,77 +1,163 @@
 <?php
-// Inicio la sesión
 session_start();
 
-// Verifica autenticación
 if (!isset($_SESSION["autenticado"]) || $_SESSION["autenticado"] != "SI") {
     header("Location: index.php");
     exit();
 }
 
-// Conexión a BD (para compartidos)
-require_once('codigos/conexion.inc'); // aquí se define $conex
+require_once('codigos/conexion.inc');
 
-// Función para escoger icono según extensión
-function iconoArchivo($nombreArchivo) {
+// Helpers 
+function limpiarRuta(string $ruta): string {
+    $ruta = trim($ruta);
+    $ruta = str_replace('\\', '/', $ruta);
+    $ruta = preg_replace('#/+#', '/', $ruta);
+    $ruta = trim($ruta, '/');
+    return $ruta;
+}
+
+function iconoArchivo(string $nombreArchivo): string {
     $ext = strtolower(pathinfo($nombreArchivo, PATHINFO_EXTENSION));
 
-    switch ($ext) {
-        case 'doc':
-        case 'docx':
-            return '<span class="glyphicon glyphicon-file" style="color:#2b579a;" title="Documento Word"></span>';
-        case 'pdf':
-            return '<span class="glyphicon glyphicon-book" style="color:#d9534f;" title="Archivo PDF"></span>';
-        case 'jpg':
-        case 'jpeg':
-        case 'png':
-        case 'gif':
-            return '<span class="glyphicon glyphicon-picture" style="color:#5cb85c;" title="Imagen"></span>';
-        case 'xls':
-        case 'xlsx':
-            return '<span class="glyphicon glyphicon-list-alt" style="color:#5cb85c;" title="Hoja de cálculo"></span>';
-        case 'txt':
-            return '<span class="glyphicon glyphicon-align-left" title="Archivo de texto"></span>';
-        default:
-            return '<span class="glyphicon glyphicon-file" title="Archivo"></span>';
+    if (in_array($ext, ['jpg','jpeg','png','gif','bmp','webp'])) return '🖼️';
+    if ($ext === 'pdf') return '📕';
+    if (in_array($ext, ['doc','docx'])) return '📝';
+    if (in_array($ext, ['xls','xlsx','csv'])) return '📊';
+    if (in_array($ext, ['txt','log'])) return '📄';
+    if (in_array($ext, ['zip','rar','7z'])) return '🗜️';
+    if (in_array($ext, ['mp4','avi','mov','mkv'])) return '🎞️';
+
+    return '📄';
+}
+
+function getUsuarioId(mysqli $conex, string $usuario): int {
+    $sql = "SELECT id FROM usuarios WHERE usuario = ? LIMIT 1";
+    $st = $conex->prepare($sql);
+    $st->bind_param("s", $usuario);
+    $st->execute();
+    $res = $st->get_result();
+    $row = $res ? $res->fetch_assoc() : null;
+    $st->close();
+    return $row ? (int)$row['id'] : 0;
+}
+
+/**
+ * Devuelve:
+ *  - null si es raíz
+ *  - int id del directorio si existe
+ *  - null si NO existe (y no crea nada)
+ */
+function obtenerDirectorioIdPorRuta(mysqli $conex, int $usuarioId, string $rutaRelativa): ?int {
+    $rutaRelativa = limpiarRuta($rutaRelativa);
+    if ($rutaRelativa === '') return null;
+
+    $partes = explode('/', $rutaRelativa);
+    $parentId = null;
+
+    foreach ($partes as $nombre) {
+        $nombre = trim($nombre);
+        if ($nombre === '') continue;
+
+        if ($parentId === null) {
+            $sql = "SELECT id FROM directorios
+                    WHERE usuario_id = ? AND parent_id IS NULL AND nombre = ?
+                    LIMIT 1";
+            $st = $conex->prepare($sql);
+            $st->bind_param("is", $usuarioId, $nombre);
+        } else {
+            $sql = "SELECT id FROM directorios
+                    WHERE usuario_id = ? AND parent_id = ? AND nombre = ?
+                    LIMIT 1";
+            $st = $conex->prepare($sql);
+            $st->bind_param("iis", $usuarioId, $parentId, $nombre);
+        }
+
+        $st->execute();
+        $res = $st->get_result();
+        $row = $res ? $res->fetch_assoc() : null;
+        $st->close();
+
+        if (!$row) {
+            return null;
+        }
+
+        $parentId = (int)$row['id'];
     }
+
+    return $parentId;
 }
 
-// Rutas base (MISMA ruta que en creadir.php, agrearchi.php, abrArchi.php, etc.)
-$rutaBase = "C:" . DIRECTORY_SEPARATOR . "xampp" . DIRECTORY_SEPARATOR . "htdocs" .
-            DIRECTORY_SEPARATOR . "LaboratorioMyBox_WebIII-RutasWindows" . DIRECTORY_SEPARATOR . "mybox";
-$rutaUsuario = $rutaBase . DIRECTORY_SEPARATOR . $_SESSION["usuario"];
-
-// Asegurar que exista la carpeta del usuario
-if (!is_dir($rutaUsuario)) {
-    mkdir($rutaUsuario, 0777, true);
+function rutaPadre(string $ruta): string {
+    $ruta = limpiarRuta($ruta);
+    if ($ruta === '') return '';
+    $partes = explode('/', $ruta);
+    array_pop($partes);
+    return implode('/', $partes);
 }
 
-// Carpeta actual (si no, raíz del usuario)
-$carpetaActualURL     = isset($_GET['carpeta']) ? $_GET['carpeta'] : '';
-$carpetaActualSistema = str_replace('/', DIRECTORY_SEPARATOR, $carpetaActualURL);
-$ruta                 = $rutaUsuario;
+// Contexto
+$usuarioActual = $_SESSION["usuario"];
+$usuarioIdActual = getUsuarioId($conex, $usuarioActual);
 
-if (!empty($carpetaActualSistema)) {
-    $ruta = $rutaUsuario . DIRECTORY_SEPARATOR . $carpetaActualSistema;
+if ($usuarioIdActual <= 0) {
+    echo "Usuario inválido en BD.";
+    exit();
 }
 
-// Verificar que la ruta esté dentro del usuario
-$rutaRealizada   = realpath($ruta);
-$rutaRealUsuario = realpath($rutaUsuario);
+$carpetaActualURL = isset($_GET['carpeta']) ? limpiarRuta($_GET['carpeta']) : '';
+$directorioIdActual = obtenerDirectorioIdPorRuta($conex, $usuarioIdActual, $carpetaActualURL);
 
-if ($rutaRealizada === false || strpos($rutaRealizada, $rutaRealUsuario) !== 0) {
-    $ruta = $rutaUsuario;
-    $carpetaActualURL = '';
-    $carpetaActualSistema = '';
+if ($carpetaActualURL !== '' && $directorioIdActual === null) {
+    header("Location: carpetas.php");
+    exit();
 }
 
-$datos = explode(DIRECTORY_SEPARATOR, $rutaBase);
+// -------------------- Consultas --------------------
+// Subcarpetas
+if ($directorioIdActual === null) {
+    $sqlCarpetas = "SELECT id, nombre, creado_en
+                    FROM directorios
+                    WHERE usuario_id = ? AND parent_id IS NULL
+                    ORDER BY nombre ASC";
+    $stmtC = $conex->prepare($sqlCarpetas);
+    $stmtC->bind_param("i", $usuarioIdActual);
+} else {
+    $sqlCarpetas = "SELECT id, nombre, creado_en
+                    FROM directorios
+                    WHERE usuario_id = ? AND parent_id = ?
+                    ORDER BY nombre ASC";
+    $stmtC = $conex->prepare($sqlCarpetas);
+    $stmtC->bind_param("ii", $usuarioIdActual, $directorioIdActual);
+}
+$stmtC->execute();
+$resCarpetas = $stmtC->get_result();
+
+// Archivos
+if ($directorioIdActual === null) {
+    $sqlArchivos = "SELECT id, nombre, extension, mime, tamano_bytes, creado_en
+                    FROM archivos
+                    WHERE usuario_id = ? AND directorio_id IS NULL
+                    ORDER BY nombre ASC";
+    $stmtA = $conex->prepare($sqlArchivos);
+    $stmtA->bind_param("i", $usuarioIdActual);
+} else {
+    $sqlArchivos = "SELECT id, nombre, extension, mime, tamano_bytes, creado_en
+                    FROM archivos
+                    WHERE usuario_id = ? AND directorio_id = ?
+                    ORDER BY nombre ASC";
+    $stmtA = $conex->prepare($sqlArchivos);
+    $stmtA->bind_param("ii", $usuarioIdActual, $directorioIdActual);
+}
+$stmtA->execute();
+$resArchivos = $stmtA->get_result();
+
 ?>
 <!doctype html>
 <html>
 <head>
     <?php include_once('partes/encabe.inc'); ?>
-    <title>Ingreso al Sitio</title>
+    <title>MiBox</title>
 </head>
 <body class="container cuerpo">
 <header class="row">
@@ -90,44 +176,13 @@ $datos = explode(DIRECTORY_SEPARATOR, $rutaBase);
     <div class="panel panel-primary">
         <div class="panel-heading">
             <strong>Mi Cajón de Archivos</strong>
-            <?php
-            if (!empty($carpetaActualURL)) {
-                echo " > " . htmlspecialchars($carpetaActualURL);
-            }
-            ?>
+            <?php if (!empty($carpetaActualURL)) echo " > " . htmlspecialchars($carpetaActualURL); ?>
         </div>
 
         <div class="panel-body">
-
             <?php
-            // ---------------- FUNCIÓN ICONO ----------------
-            if (!function_exists('iconoArchivo')) {
-                function iconoArchivo($nombre) {
-                    $ext = strtolower(pathinfo($nombre, PATHINFO_EXTENSION));
-
-                    if (in_array($ext, ['jpg','jpeg','png','gif','bmp'])) {
-                        return '<span class="glyphicon glyphicon-picture"></span>';
-                    }
-                    if ($ext === 'pdf') {
-                        return '<span class="glyphicon glyphicon-book"></span>';
-                    }
-                    if (in_array($ext, ['doc','docx'])) {
-                        return '<span class="glyphicon glyphicon-file"></span>';
-                    }
-                    if (in_array($ext, ['xls','xlsx'])) {
-                        return '<span class="glyphicon glyphicon-list-alt"></span>';
-                    }
-                    if (in_array($ext, ['mp4','avi','mov'])) {
-                        return '<span class="glyphicon glyphicon-film"></span>';
-                    }
-
-                    return '<span class="glyphicon glyphicon-file"></span>';
-                }
-            }
-
-            // ---------------- BOTONES ----------------
+            // Botones
             $params = !empty($carpetaActualURL) ? '?carpeta=' . urlencode($carpetaActualURL) : '';
-
             echo '<div class="btn-group" role="group">';
             echo '<a href="./codigos/creadir.php' . $params . '" class="btn btn-success">Crear Carpeta</a>';
             echo '&nbsp;&nbsp;';
@@ -135,12 +190,12 @@ $datos = explode(DIRECTORY_SEPARATOR, $rutaBase);
             echo '</div>';
 
             if (!empty($carpetaActualURL)) {
+                $padre = rutaPadre($carpetaActualURL);
                 echo '<br><br>';
-                echo '<a href="./carpetas.php" class="btn btn-info">Volver Atrás</a>';
+                echo '<a href="./carpetas.php' . ($padre !== '' ? '?carpeta=' . urlencode($padre) : '') . '" class="btn btn-info">Volver Atrás</a>';
                 echo '<br><br>';
             }
 
-            // ---------------- TABLA: ARCHIVOS PROPIOS ----------------
             echo '<h4>Mis archivos</h4>';
             echo '<table class="table table-striped">';
             echo '<tr>';
@@ -148,115 +203,100 @@ $datos = explode(DIRECTORY_SEPARATOR, $rutaBase);
             echo '<th>Nombre</th>';
             echo '<th>Tipo</th>';
             echo '<th>Tamaño (MB)</th>';
-            echo '<th>Último acceso</th>';
+            echo '<th>Fecha</th>';
             echo '<th>Acciones</th>';
             echo '</tr>';
 
-            if (!is_dir($ruta)) {
-                echo '<tr><td colspan="6"><em>La carpeta no existe o ha sido eliminada.</em></td></tr>';
-            } else {
+            $hayAlgo = false;
 
-                $directorio = opendir($ruta);
-                $archivos = [];
-                $carpetas = [];
-
-                while ($elem = readdir($directorio)) {
-                    if ($elem !== '.' && $elem !== '..') {
-                        if (is_dir($ruta . DIRECTORY_SEPARATOR . $elem)) {
-                            $carpetas[] = $elem;
-                        } else {
-                            $archivos[] = $elem;
-                        }
-                    }
-                }
-                closedir($directorio);
-
-                // -------- Carpetas --------
-                sort($carpetas);
-                foreach ($carpetas as $carpeta) {
-
-                    $rutaCarpeta = $ruta . DIRECTORY_SEPARATOR . $carpeta;
-                    $nuevaCarpetaURL = empty($carpetaActualURL)
-                        ? $carpeta
-                        : $carpetaActualURL . '/' . $carpeta;
+            // Carpetas
+            if ($resCarpetas && $resCarpetas->num_rows > 0) {
+                $hayAlgo = true;
+                while ($row = $resCarpetas->fetch_assoc()) {
+                    $nombreCarpeta = $row['nombre'];
+                    $nuevaCarpetaURL = $carpetaActualURL === '' ? $nombreCarpeta : ($carpetaActualURL . '/' . $nombreCarpeta);
 
                     echo '<tr>';
-                    echo '<td><span class="glyphicon glyphicon-folder-open" style="color:#337ab7;"></span></td>';
-                    echo '<td><strong><a href="carpetas.php?carpeta=' . urlencode($nuevaCarpetaURL) . '">' . htmlspecialchars($carpeta) . '</a></strong></td>';
+                    echo '<td>📁</td>';
+                    echo '<td><strong><a href="carpetas.php?carpeta=' . urlencode($nuevaCarpetaURL) . '">' . htmlspecialchars($nombreCarpeta) . '</a></strong></td>';
                     echo '<td>Carpeta</td>';
                     echo '<td>-</td>';
-                    echo '<td>' . date("d/m/y H:i:s", fileatime($rutaCarpeta)) . '</td>';
-                    echo '<td><a href="./codigos/borrardir.php?dir=' . urlencode($carpeta) .
-                        '&carpeta=' . urlencode($carpetaActualURL) .
-                        '" class="btn btn-danger btn-sm" onclick="return confirm(\'¿Está seguro de que desea eliminar esta carpeta y su contenido?\')">Borrar</a></td>';
+                    echo '<td>' . htmlspecialchars($row['creado_en'] ?? '-') . '</td>';
+                    echo '<td>';
+                    echo '<a href="./codigos/borrardir.php?dirId=' . urlencode($row['id']) .
+                         '&carpeta=' . urlencode($carpetaActualURL) .
+                         '" class="btn btn-danger btn-sm" onclick="return confirm(\'¿Está seguro de que desea eliminar esta carpeta y su contenido?\')">Borrar</a>';
+                    echo '</td>';
                     echo '</tr>';
                 }
+            }
 
-                // -------- Archivos --------
-                sort($archivos);
-                foreach ($archivos as $archivo) {
+            // Archivos
+            if ($resArchivos && $resArchivos->num_rows > 0) {
+                $hayAlgo = true;
+                while ($row = $resArchivos->fetch_assoc()) {
+                    $fileId = (int)$row['id'];
+                    $nombre = $row['nombre'];
+                    $ext = $row['extension'] ?? '';
+                    $nombreConExt = $nombre;
 
-                    $rutaArchivo   = $ruta . DIRECTORY_SEPARATOR . $archivo;
-                    $sizeBytes     = filesize($rutaArchivo);
-                    $sizeMB        = $sizeBytes / (1024 * 1024);
-                    $sizeMBFormat  = number_format($sizeMB, 2);
-                    $icono         = iconoArchivo($archivo);
+                    if (!empty($ext) && stripos($nombre, '.') === false) {
+                        $nombreConExt .= '.' . $ext;
+                    }
+
+                    $tamano = (int)($row['tamano_bytes'] ?? 0);
+                    $tamanoMB = number_format($tamano / (1024 * 1024), 2);
 
                     echo '<tr>';
-                    echo '<td>' . $icono . '</td>';
-
-                    echo '<td><a href="abrArchi.php?arch=' . urlencode($archivo) .
-                                        '&carpeta=' . urlencode($carpetaActualURL) .
-                                        '&owner=' . urlencode($_SESSION["usuario"]) .
-                                        '" target="_blank">' .
-                                        htmlspecialchars($archivo) .
-                        '</a></td>';
-
+                    echo '<td>' . iconoArchivo($nombreConExt) . '</td>';
+                    echo '<td><a href="abrArchi.php?id=' . urlencode($fileId) . '" target="_blank">' . htmlspecialchars($nombreConExt) . '</a></td>';
                     echo '<td>Archivo</td>';
-                    echo '<td>' . $sizeMBFormat . ' MB</td>';
-                    echo '<td>' . date("d/m/y H:i:s", fileatime($rutaArchivo)) . '</td>';
-
+                    echo '<td>' . $tamanoMB . ' MB</td>';
+                    echo '<td>' . htmlspecialchars($row['creado_en'] ?? '-') . '</td>';
                     echo '<td>';
-                    echo '<a href="./codigos/descargar.php?arch=' . urlencode($archivo) .
-                                        '&carpeta=' . urlencode($carpetaActualURL) .
-                                        '" class="btn btn-success btn-sm">Descargar</a>';
+                    echo '<a href="./codigos/descargar.php?id=' . urlencode($fileId) . '" class="btn btn-success btn-sm">Descargar</a>';
                     echo '&nbsp;';
-                    echo '<a href="./codigos/compartir.php?arch=' . urlencode($archivo) .
-                                        '&carpeta=' . urlencode($carpetaActualURL) .
-                                        '" class="btn btn-info btn-sm">Compartir</a>';
+                    echo '<a href="./codigos/compartir.php?id=' . urlencode($fileId) . '" class="btn btn-info btn-sm">Compartir</a>';
                     echo '&nbsp;';
-                    echo '<a href="./codigos/borarchi.php?archi=' . urlencode($archivo) .
-                                        '&carpeta=' . urlencode($carpetaActualURL) .
-                                        '" class="btn btn-danger btn-sm" onclick="return confirm(\'¿Está seguro?\')">Borrar</a>';
+                    echo '<a href="./codigos/borarchi.php?id=' . urlencode($fileId) .
+                         '&carpeta=' . urlencode($carpetaActualURL) .
+                         '" class="btn btn-danger btn-sm" onclick="return confirm(\'¿Está seguro?\')">Borrar</a>';
                     echo '</td>';
-
                     echo '</tr>';
                 }
+            }
 
-                if (count($carpetas) + count($archivos) === 0) {
-                    echo '<tr><td colspan="6"><em>La carpeta se encuentra vacía</em></td></tr>';
-                }
+            if (!$hayAlgo) {
+                echo '<tr><td colspan="6"><em>La carpeta se encuentra vacía</em></td></tr>';
             }
 
             echo '</table>';
 
-            // ---------------- TABLA COMPARTIDOS ----------------
-            $usuarioActual = $_SESSION['usuario'];
+            // COMPARTIDOS CONMIGO 
+            $sqlCompartidos = "
+                SELECT
+                    a.id            AS archivo_id,
+                    a.nombre        AS nombre,
+                    a.extension     AS extension,
+                    u.usuario       AS propietario_usuario,
+                    c.permiso       AS permiso,
+                    c.creado_en     AS compartido_en
+                FROM compartidos c
+                INNER JOIN archivos a ON a.id = c.archivo_id
+                INNER JOIN usuarios u ON u.id = c.propietario_id
+                WHERE c.compartido_con_id = ?
+                  AND c.tipo = 'archivo'
+                ORDER BY c.creado_en DESC
+            ";
 
-            $sqlCompartidos = "SELECT propietario, ruta_relativa, tipo
-                               FROM compartidos
-                               WHERE usuario_compartido = ?";
+            $stmtS = $conex->prepare($sqlCompartidos);
+            $stmtS->bind_param("i", $usuarioIdActual);
+            $stmtS->execute();
+            $resS = $stmtS->get_result();
 
-            $stmt = $conex->prepare($sqlCompartidos);
-            $stmt->bind_param("s", $usuarioActual);
-            $stmt->execute();
-            $result = $stmt->get_result();
-
-            if ($result && $result->num_rows > 0) {
-
+            if ($resS && $resS->num_rows > 0) {
                 echo '<hr>';
                 echo '<h4>Archivos compartidos conmigo</h4>';
-
                 echo '<table class="table table-striped">';
                 echo '<tr>';
                 echo '<th>Icono</th>';
@@ -266,55 +306,36 @@ $datos = explode(DIRECTORY_SEPARATOR, $rutaBase);
                 echo '<th>Acciones</th>';
                 echo '</tr>';
 
-                while ($row = $result->fetch_assoc()) {
-
-                    $propietario  = $row['propietario'];
-                    $rutaRelativa = $row['ruta_relativa'];
-                    $tipoPermiso  = $row['tipo'];
-
-                    if (strpos($rutaRelativa, '/') !== false) {
-                        $carpetaRel = dirname($rutaRelativa);
-                        $archivoRel = basename($rutaRelativa);
-                    } else {
-                        $carpetaRel = '';
-                        $archivoRel = $rutaRelativa;
-                    }
-
-                    $icono = iconoArchivo($archivoRel);
+                while ($r = $resS->fetch_assoc()) {
+                    $archivoId = (int)$r['archivo_id'];
+                    $nombre = $r['nombre'];
+                    $ext = $r['extension'] ?? '';
+                    $nombreConExt = $nombre;
+                    if (!empty($ext) && stripos($nombre, '.') === false) $nombreConExt .= '.' . $ext;
 
                     echo '<tr>';
-                    echo '<td>' . $icono . '</td>';
-                    echo '<td>' . htmlspecialchars($archivoRel) . '</td>';
-                    echo '<td>' . htmlspecialchars($propietario) . '</td>';
-                    echo '<td>' . htmlspecialchars(ucfirst($tipoPermiso)) . '</td>';
-
+                    echo '<td>' . iconoArchivo($nombreConExt) . '</td>';
+                    echo '<td>' . htmlspecialchars($nombreConExt) . '</td>';
+                    echo '<td>' . htmlspecialchars($r['propietario_usuario']) . '</td>';
+                    echo '<td>' . htmlspecialchars(ucfirst($r['permiso'])) . '</td>';
                     echo '<td>';
-                    echo '<a href="abrArchi.php?arch=' . urlencode($archivoRel) .
-                        '&carpeta=' . urlencode($carpetaRel) .
-                        '&owner=' . urlencode($propietario) .
-                        '" target="_blank" class="btn btn-info btn-sm">Abrir</a>';
-
+                    echo '<a href="abrArchi.php?id=' . urlencode($archivoId) . '" target="_blank" class="btn btn-info btn-sm">Abrir</a>';
                     echo '&nbsp;';
-
-                    echo '<a href="./codigos/descargar.php?arch=' . urlencode($archivoRel) .
-                        '&carpeta=' . urlencode($carpetaRel) .
-                        '&owner=' . urlencode($propietario) .
-                        '" class="btn btn-success btn-sm">Descargar</a>';
+                    echo '<a href="./codigos/descargar.php?id=' . urlencode($archivoId) . '" class="btn btn-success btn-sm">Descargar</a>';
                     echo '</td>';
-
                     echo '</tr>';
                 }
 
                 echo '</table>';
             }
 
-            $stmt->close();
+            $stmtS->close();
+            $stmtC->close();
+            $stmtA->close();
             ?>
-
         </div>
     </div>
 </main>
-
 
 <footer class="row"></footer>
 <?php include_once('partes/final.inc'); ?>

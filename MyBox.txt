@@ -59,7 +59,6 @@ Step 03 - Create database on MySQL.
 			primary key (usuario) 
 		) engine=innodb charset=utf8mb4;
 
--- pasos que hice para que sirviera esa pich
 
 	sudo apt update
 	sudo apt install -y mysql-server

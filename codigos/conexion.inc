@@ -1,19 +1,19 @@
 <?php
-    // parámetros de conexión
-    $servidor  = "127.0.0.1";   // o "localhost"
-    $basedatos = "mybox";
-    $usuario   = "root";
-    $contra    = "";            // SIN contraseña en XAMPP por defecto
+// parámetros de conexión
+$servidor  = "127.0.0.1";
+$basedatos = "mybox2";
+$usuario   = "root";
+$contra    = "";
 
-    // durante desarrollo es mejor ver los errores
-    // si quieres ocultarlos luego, puedes volver a poner error_reporting(0);
-    // error_reporting(0);
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
 
-    // proceso para conectar con el servidor
-    if(!$conex = mysqli_connect($servidor, $usuario, $contra, $basedatos)){
-        echo "<h3><font color='red'>Error: No se puede conectar al servidor de MySQL.</font></h3><hr>";
-        echo "<strong>Número........:</strong> " . mysqli_connect_errno() . "<br>";
-        echo "<strong>Descripción...:</strong> " . mysqli_connect_error() . "<br>";
-        exit;
-    }
+try {
+    $conex = new mysqli($servidor, $usuario, $contra, $basedatos);
+    $conex->set_charset("utf8mb4");
+} catch (mysqli_sql_exception $e) {
+    http_response_code(500);
+    echo "<h3 style='color:red'>Error: No se puede conectar a MySQL.</h3>";
+    echo "<strong>Detalle:</strong> " . htmlspecialchars($e->getMessage());
+    exit;
+}
 ?>

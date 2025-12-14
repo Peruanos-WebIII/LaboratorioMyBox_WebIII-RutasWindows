@@ -1,109 +1,108 @@
 <?php
-// Inicio la sesión
 session_start();
 
-// Verifica que el usuario esté autenticado
 if (!isset($_SESSION["autenticado"]) || $_SESSION["autenticado"] != "SI") {
     header("Location: ../index.php");
-    exit(); // fin del script
+    exit();
 }
 
-// Obtener parámetros
-$carpetaABorrar  = isset($_GET['dir'])     ? $_GET['dir']     : '';
-$carpetaActual   = isset($_GET['carpeta']) ? $_GET['carpeta'] : '';
+require_once('conexion.inc');
 
-if ($carpetaABorrar === '') {
+$dirId = isset($_GET['dirId']) ? (int)$_GET['dirId'] : 0;
+$carpetaActual = isset($_GET['carpeta']) ? $_GET['carpeta'] : '';
+
+if ($dirId <= 0) {
     header("Location: ../carpetas.php");
     exit();
 }
 
-// MISMA ruta base que en carpetas.php / creadir.php / agrearchi.php / abrArchi.php
-$rutaBase    = "C:" . DIRECTORY_SEPARATOR . "xampp" . DIRECTORY_SEPARATOR . "htdocs"
-             . DIRECTORY_SEPARATOR . "LaboratorioMyBox_WebIII-RutasWindows"
-             . DIRECTORY_SEPARATOR . "mybox";
-$rutaUsuario = $rutaBase . DIRECTORY_SEPARATOR . $_SESSION["usuario"];
+// mi usuario_id
+$sqlMiId = "SELECT id FROM usuarios WHERE usuario = ? LIMIT 1";
+$stmtMi  = $conex->prepare($sqlMiId);
+$stmtMi->bind_param("s", $_SESSION['usuario']);
+$stmtMi->execute();
+$resMi = $stmtMi->get_result();
+$miRow = $resMi->fetch_assoc();
+$stmtMi->close();
 
-// Construir la ruta actual (donde estoy parado en carpetas.php)
-$rutaActual = $rutaUsuario;
-if (!empty($carpetaActual)) {
-    // la carpetaActual viene estilo URL (con /), la pasamos a separador del sistema
-    $carpetaActualSistema = str_replace('/', DIRECTORY_SEPARATOR, $carpetaActual);
-    $rutaActual           = $rutaUsuario . DIRECTORY_SEPARATOR . $carpetaActualSistema;
-}
-
-// Ruta de la carpeta a borrar
-$rutaBorrar = $rutaActual . DIRECTORY_SEPARATOR . $carpetaABorrar;
-
-// Verificamos que todo esté dentro de la carpeta del usuario (seguridad)
-$rutaRealUsuario = realpath($rutaUsuario);
-$rutaRealActual  = realpath($rutaActual);
-$rutaRealBorrar  = realpath($rutaBorrar);
-
-if ($rutaRealUsuario === false || $rutaRealActual === false || $rutaRealBorrar === false ||
-    strpos($rutaRealActual, $rutaRealUsuario) !== 0 ||
-    strpos($rutaRealBorrar,  $rutaRealUsuario) !== 0) {
+$miId = $miRow ? (int)$miRow['id'] : 0;
+if ($miId <= 0) {
     header("Location: ../carpetas.php");
     exit();
 }
 
-// Función recursiva para borrar carpeta con su contenido
-function borrarCarpetaRecursiva($rutaDir)
-{
-    if (!is_dir($rutaDir)) {
-        return false;
-    }
+// validar que la carpeta sea mía
+$sqlVal = "SELECT id FROM directorios WHERE id = ? AND usuario_id = ? LIMIT 1";
+$stmtV = $conex->prepare($sqlVal);
+$stmtV->bind_param("ii", $dirId, $miId);
+$stmtV->execute();
+$resV = $stmtV->get_result();
+$ok = ($resV && $resV->num_rows > 0);
+$stmtV->close();
 
-    $items = scandir($rutaDir);
-    foreach ($items as $item) {
-        if ($item === '.' || $item === '..') {
-            continue;
+if (!$ok) {
+    header("Location: ../carpetas.php");
+    exit();
+}
+
+function borrarDirectorioRecursivo(mysqli $conex, int $usuarioId, int $dirId): void {
+    // borrar archivos del directorio
+    $sqlFiles = "SELECT id FROM archivos WHERE usuario_id = ? AND directorio_id = ?";
+    $stF = $conex->prepare($sqlFiles);
+    $stF->bind_param("ii", $usuarioId, $dirId);
+    $stF->execute();
+    $resF = $stF->get_result();
+
+    if ($resF) {
+        while ($row = $resF->fetch_assoc()) {
+            $fileId = (int)$row['id'];
+
+            $sqlDelC = "DELETE FROM compartidos WHERE archivo_id = ?";
+            $stC = $conex->prepare($sqlDelC);
+            $stC->bind_param("i", $fileId);
+            $stC->execute();
+            $stC->close();
+
+            $sqlDelF = "DELETE FROM archivos WHERE id = ? AND usuario_id = ?";
+            $stDF = $conex->prepare($sqlDelF);
+            $stDF->bind_param("ii", $fileId, $usuarioId);
+            $stDF->execute();
+            $stDF->close();
         }
+    }
+    $stF->close();
 
-        $rutaItem = $rutaDir . DIRECTORY_SEPARATOR . $item;
+    // buscar subdirectorios y borrarlos primero
+    $sqlDirs = "SELECT id FROM directorios WHERE usuario_id = ? AND parent_id = ?";
+    $stD = $conex->prepare($sqlDirs);
+    $stD->bind_param("ii", $usuarioId, $dirId);
+    $stD->execute();
+    $resD = $stD->get_result();
 
-        if (is_dir($rutaItem)) {
-            borrarCarpetaRecursiva($rutaItem);
-        } else {
-            @unlink($rutaItem);
+    if ($resD) {
+        while ($row = $resD->fetch_assoc()) {
+            borrarDirectorioRecursivo($conex, $usuarioId, (int)$row['id']);
         }
     }
+    $stD->close();
 
-    return @rmdir($rutaDir);
+    // borrar compartidos del directorio si existieran
+    $sqlDelCD = "DELETE FROM compartidos WHERE directorio_id = ?";
+    $stCD = $conex->prepare($sqlDelCD);
+    $stCD->bind_param("i", $dirId);
+    $stCD->execute();
+    $stCD->close();
+
+    // borrar el directorio
+    $sqlDelDir = "DELETE FROM directorios WHERE id = ? AND usuario_id = ?";
+    $stDel = $conex->prepare($sqlDelDir);
+    $stDel->bind_param("ii", $dirId, $usuarioId);
+    $stDel->execute();
+    $stDel->close();
 }
 
-// Intentar borrar la carpeta
-if (borrarCarpetaRecursiva($rutaBorrar)) {
-    $mensaje = "Carpeta eliminada exitosamente.";
-    $tipo    = "success";
-} else {
-    $mensaje = "No se pudo eliminar la carpeta. Verifique los permisos.";
-    $tipo    = "danger";
-}
+borrarDirectorioRecursivo($conex, $miId, $dirId);
 
-// Armar URL de retorno
-$urlRetorno = "../carpetas.php";
-if (!empty($carpetaActual)) {
-    $urlRetorno .= "?carpeta=" . urlencode($carpetaActual);
-}
-
-// Mostrar mensaje y redirigir a carpetas.php
-?>
-<!doctype html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>Eliminar Carpeta</title>
-    <link rel="stylesheet" href="../estilos/bootstrap.css">
-    <link rel="stylesheet" href="../estilos/formatos.css">
-</head>
-<body class="container cuerpo">
-    <div class="alert alert-<?php echo htmlspecialchars($tipo); ?>" style="margin-top:20px;">
-        <h3><?php echo htmlspecialchars($mensaje); ?></h3>
-    </div>
-    <script>
-        setTimeout(function () {
-            location.href = '<?php echo $urlRetorno; ?>';
-        }, 2000);
-    </script>
-</body>
-</html>
+$urlRetorno = "../carpetas.php" . (!empty($carpetaActual) ? "?carpeta=" . urlencode($carpetaActual) : "");
+header("Location: " . $urlRetorno);
+exit();

@@ -1,201 +1,178 @@
 <?php
-// codigos/compartir.php
-
 session_start();
 
-// Verifica autenticación
 if (!isset($_SESSION["autenticado"]) || $_SESSION["autenticado"] != "SI") {
     header("Location: ../index.php");
     exit();
 }
 
-// Parámetros de la URL
-$archivo       = isset($_GET['arch'])    ? $_GET['arch']    : '';
-$carpetaActual = isset($_GET['carpeta']) ? $_GET['carpeta'] : '';
+require_once('conexion.inc');
 
-// Validar que venga el nombre del archivo
-if ($archivo === '') {
+$archivoId = isset($_GET['id']) ? (int)$_GET['id'] : 0;
+if ($archivoId <= 0) {
     header("Location: ../carpetas.php");
     exit();
 }
 
-// Incluir conexión a BD (misma que index.php / registrar.php)
-require_once('../codigos/conexion.inc'); // OJO: conexion.inc está dentro de /codigos
+// mi usuario_id
+$sqlMiId = "SELECT id FROM usuarios WHERE usuario = ? LIMIT 1";
+$stmtMi  = $conex->prepare($sqlMiId);
+$stmtMi->bind_param("s", $_SESSION['usuario']);
+$stmtMi->execute();
+$resMi = $stmtMi->get_result();
+$miRow = $resMi->fetch_assoc();
+$stmtMi->close();
 
-// --- RUTAS ---
-// Ruta base igual que en carpetas.php / descargar.php / agrearchi.php / abrArchi.php
-$rutaBase    = "C:" . DIRECTORY_SEPARATOR . "xampp" . DIRECTORY_SEPARATOR . "htdocs" . DIRECTORY_SEPARATOR . "LaboratorioMyBox_WebIII-RutasWindows" . DIRECTORY_SEPARATOR . "mybox";
-$rutaUsuario = $rutaBase . DIRECTORY_SEPARATOR . $_SESSION["usuario"];
-
-// Asegurarse de que existe la carpeta del usuario
-if (!is_dir($rutaUsuario)) {
+$miId = $miRow ? (int)$miRow['id'] : 0;
+if ($miId <= 0) {
     header("Location: ../carpetas.php");
     exit();
 }
 
-// Determinar carpeta actual en el sistema
-$ruta = $rutaUsuario;
-if (!empty($carpetaActual)) {
-    $carpetaActualSistema = str_replace('/', DIRECTORY_SEPARATOR, $carpetaActual);
-    $ruta = $rutaUsuario . DIRECTORY_SEPARATOR . $carpetaActualSistema;
-}
+// validar que el archivo sea mío
+$sqlVal = "SELECT id, nombre, extension FROM archivos WHERE id = ? AND usuario_id = ? LIMIT 1";
+$stmtV = $conex->prepare($sqlVal);
+$stmtV->bind_param("ii", $archivoId, $miId);
+$stmtV->execute();
+$resV = $stmtV->get_result();
+$archivoRow = $resV ? $resV->fetch_assoc() : null;
+$stmtV->close();
 
-// Normalizar nombre de archivo
-$archivoSeguro = basename($archivo);
-$rutaArchivo   = $ruta . DIRECTORY_SEPARATOR . $archivoSeguro;
-
-// Verificar que ruta y archivo sean válidos y estén dentro de la carpeta del usuario
-$rutaRealizada        = realpath($ruta);
-$rutaArchivoRealizada = realpath($rutaArchivo);
-$rutaRealUsuario      = realpath($rutaUsuario);
-
-if ($rutaRealizada === false ||
-    $rutaArchivoRealizada === false ||
-    strpos($rutaRealizada, $rutaRealUsuario) !== 0 ||
-    strpos($rutaArchivoRealizada, $rutaRealUsuario) !== 0 ||
-    !is_file($rutaArchivoRealizada)) {
-
+if (!$archivoRow) {
     header("Location: ../carpetas.php");
     exit();
 }
 
-// Ruta relativa que vamos a guardar en la BD
-$ruta_relativa = !empty($carpetaActual)
-    ? $carpetaActual . '/' . $archivoSeguro
-    : $archivoSeguro;
+$nombreArchivo = $archivoRow['nombre'];
+if (!empty($archivoRow['extension']) && stripos($nombreArchivo, '.') === false) {
+    $nombreArchivo .= '.' . $archivoRow['extension'];
+}
 
-// Si el formulario fue enviado
-$mensajeError   = '';
-$mensajeExito   = '';
+$error = '';
+$okMsg = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $usuario_compartido = isset($_POST['usuario']) ? trim($_POST['usuario']) : '';
-    $tipo_permiso       = isset($_POST['permiso']) ? trim($_POST['permiso']) : 'lectura';
-    $propietario        = $_SESSION['usuario'];
+    $usuarioDestino = isset($_POST['usuario']) ? trim($_POST['usuario']) : '';
+    $permiso = isset($_POST['permiso']) ? trim($_POST['permiso']) : 'lectura';
 
-    if ($usuario_compartido === '') {
-        $mensajeError = "Debe seleccionar un usuario para compartir.";
-    } elseif ($usuario_compartido === $propietario) {
-        $mensajeError = "No tiene sentido compartir un archivo con usted mismo.";
+    if ($usuarioDestino === '') {
+        $error = "Debe elegir un usuario.";
     } else {
-        // Insertar en BD (tabla compartidos)
-        $sql = "INSERT INTO compartidos (propietario, ruta_relativa, usuario_compartido, tipo)
-                VALUES (?, ?, ?, ?)";
-        
-        if ($stmt = mysqli_prepare($conex, $sql)) {
-            mysqli_stmt_bind_param($stmt, "ssss", $propietario, $ruta_relativa, $usuario_compartido, $tipo_permiso);
-            
-            if (mysqli_stmt_execute($stmt)) {
-                mysqli_stmt_close($stmt);
-                // Redirige de vuelta a carpetas.php
-                $urlRetorno = "../carpetas.php" . (!empty($carpetaActual) ? "?carpeta=" . urlencode($carpetaActual) : "");
-                header("Location: " . $urlRetorno);
-                exit();
-            } else {
-                $mensajeError = "Error al registrar el archivo compartido en la base de datos.";
-            }
+        // buscar id destino
+        $sqlU = "SELECT id FROM usuarios WHERE usuario = ? LIMIT 1";
+        $stU = $conex->prepare($sqlU);
+        $stU->bind_param("s", $usuarioDestino);
+        $stU->execute();
+        $resU = $stU->get_result();
+        $rowU = $resU ? $resU->fetch_assoc() : null;
+        $stU->close();
+
+        $destId = $rowU ? (int)$rowU['id'] : 0;
+
+        if ($destId <= 0) {
+            $error = "El usuario destino no existe.";
+        } elseif ($destId === $miId) {
+            $error = "No puede compartirse a usted mismo.";
         } else {
-            $mensajeError = "Error al preparar la consulta de compartido.";
+            // evitar duplicado
+            $sqlChk = "SELECT 1 FROM compartidos
+                       WHERE archivo_id = ? AND propietario_id = ? AND compartido_con_id = ? AND tipo='archivo'
+                       LIMIT 1";
+            $stC = $conex->prepare($sqlChk);
+            $stC->bind_param("iii", $archivoId, $miId, $destId);
+            $stC->execute();
+            $resC = $stC->get_result();
+            $ya = ($resC && $resC->num_rows > 0);
+            $stC->close();
+
+            if ($ya) {
+                $error = "Ya está compartido con ese usuario.";
+            } else {
+                // insertar
+                $sqlIns = "INSERT INTO compartidos (archivo_id, directorio_id, propietario_id, compartido_con_id, permiso, tipo)
+                           VALUES (?, NULL, ?, ?, ?, 'archivo')";
+                $stI = $conex->prepare($sqlIns);
+                $stI->bind_param("iiis", $archivoId, $miId, $destId, $permiso);
+
+                if ($stI->execute()) {
+                    $okMsg = "Archivo compartido correctamente.";
+                } else {
+                    $error = "No se pudo compartir.";
+                }
+                $stI->close();
+            }
         }
     }
 }
 
-// Obtener lista de usuarios posibles para compartir (excepto el actual)
-$listaUsuarios = [];
-$sqlUsuarios   = "SELECT usuario, nombre FROM usuarios WHERE usuario <> ? ORDER BY usuario";
-
-if ($stmtUsuarios = mysqli_prepare($conex, $sqlUsuarios)) {
-    mysqli_stmt_bind_param($stmtUsuarios, "s", $_SESSION['usuario']);
-    mysqli_stmt_execute($stmtUsuarios);
-    $resultado = mysqli_stmt_get_result($stmtUsuarios);
-    while ($fila = mysqli_fetch_assoc($resultado)) {
-        $listaUsuarios[] = $fila;
-    }
-    mysqli_stmt_close($stmtUsuarios);
-}
+// lista de usuarios
+$sqlUsers = "SELECT usuario FROM usuarios WHERE id <> ? ORDER BY usuario ASC";
+$stL = $conex->prepare($sqlUsers);
+$stL->bind_param("i", $miId);
+$stL->execute();
+$resL = $stL->get_result();
+$stL->close();
 ?>
 <!doctype html>
 <html>
 <head>
     <?php include_once('../partes/encabe.inc'); ?>
-    <title>Compartir archivo</title>
+    <title>Compartir</title>
 </head>
 <body class="container cuerpo">
-    <header class="row">
-        <div class="row">
-            <div class="col-lg-6 col-sm-6">
-                <img src="../imagenes/encabe.png" alt="logo institucional" width="100%">
-            </div>
+<header class="row">
+    <div class="row">
+        <div class="col-lg-6 col-sm-6">
+            <img src="../imagenes/encabe.png" alt="logo institucional" width="100%">
         </div>
-        <div class="row">
-            <?php include_once('../partes/menu.inc'); ?>
+    </div>
+    <div class="row">
+        <?php include_once('../partes/menu.inc'); ?>
+    </div>
+    <br />
+</header>
+
+<main class="row">
+    <div class="panel panel-primary datos3">
+        <div class="panel-heading">
+            <strong>Compartir archivo</strong>
         </div>
-        <br />
-    </header>
+        <div class="panel-body">
+            <p><strong>Archivo:</strong> <?php echo htmlspecialchars($nombreArchivo); ?></p>
 
-    <main class="row">
-        <div class="panel panel-primary datos1">
-            <div class="panel-heading">
-                <strong>Compartir archivo</strong>
-            </div>
-            <div class="panel-body">
-                <p><strong>Archivo:</strong> <?php echo htmlspecialchars($archivoSeguro); ?></p>
-                <p><strong>Ruta relativa:</strong> <?php echo htmlspecialchars($ruta_relativa); ?></p>
+            <?php if ($error !== ''): ?>
+                <div class="alert alert-danger"><?php echo htmlspecialchars($error); ?></div>
+            <?php endif; ?>
 
-                <?php if ($mensajeError !== ''): ?>
-                    <div class="alert alert-danger">
-                        <?php echo htmlspecialchars($mensajeError); ?>
-                    </div>
-                <?php endif; ?>
+            <?php if ($okMsg !== ''): ?>
+                <div class="alert alert-success"><?php echo htmlspecialchars($okMsg); ?></div>
+            <?php endif; ?>
 
-                <?php if ($mensajeExito !== ''): ?>
-                    <div class="alert alert-success">
-                        <?php echo htmlspecialchars($mensajeExito); ?>
-                    </div>
-                <?php endif; ?>
+            <form method="post">
+                <label><strong>Usuario destino</strong></label>
+                <select name="usuario" class="form-control" required>
+                    <option value="">-- Seleccione --</option>
+                    <?php if ($resL): while ($u = $resL->fetch_assoc()): ?>
+                        <option value="<?php echo htmlspecialchars($u['usuario']); ?>"><?php echo htmlspecialchars($u['usuario']); ?></option>
+                    <?php endwhile; endif; ?>
+                </select>
 
-                <?php if (count($listaUsuarios) === 0): ?>
-                    <div class="alert alert-warning">
-                        No hay otros usuarios registrados para compartir archivos.
-                    </div>
-                <?php else: ?>
-                    <form action="<?php echo $_SERVER['PHP_SELF'] . '?arch=' . urlencode($archivo) . '&carpeta=' . urlencode($carpetaActual); ?>" method="post">
-                        <fieldset>
-                            <label for="usuario"><strong>Usuario con quien compartir</strong></label><br>
-                            <select name="usuario" id="usuario" required>
-                                <option value="">-- Seleccione un usuario --</option>
-                                <?php foreach ($listaUsuarios as $u): ?>
-                                    <option value="<?php echo htmlspecialchars($u['usuario']); ?>">
-                                        <?php echo htmlspecialchars($u['usuario'] . ' - ' . $u['nombre']); ?>
-                                    </option>
-                                <?php endforeach; ?>
-                            </select>
-                            <br><br>
+                <br>
 
-                            <label><strong>Permiso</strong></label><br>
-                            <label>
-                                <input type="radio" name="permiso" value="lectura" checked>
-                                Solo lectura
-                            </label>
-                            &nbsp;&nbsp;
-                            <label>
-                                <input type="radio" name="permiso" value="lectura_escritura">
-                                Lectura / escritura
-                            </label>
-                            <br><br>
+                <label><strong>Permiso</strong></label>
+                <select name="permiso" class="form-control">
+                    <option value="lectura">Lectura</option>
+                    <option value="escritura">Escritura</option>
+                </select>
 
-                            <input type="submit" value="Compartir" class="btn btn-primary" />
-                            <a href="../carpetas.php<?php echo (!empty($carpetaActual) ? '?carpeta=' . urlencode($carpetaActual) : ''); ?>" class="btn btn-default">
-                                Cancelar
-                            </a>
-                        </fieldset>
-                    </form>
-                <?php endif; ?>
-            </div>
+                <br>
+                <button class="btn btn-info" type="submit">Compartir</button>
+                <a class="btn btn-default" href="../carpetas.php">Volver</a>
+            </form>
         </div>
-    </main>
+    </div>
+</main>
 
-    <footer class="row"></footer>
-    <?php include_once('../partes/final.inc'); ?>
+<?php include_once('../partes/final.inc'); ?>
 </body>
 </html>
